@@ -1,0 +1,32 @@
+{
+  "name": "pricewatch",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.1",
+    "compression": "^1.7.4",
+    "convert-array-to-csv": "^2.0.0",
+    "cors": "^2.8.5",
+    "danfojs": "^1.1.2",
+    "danfojs-node": "^1.1.2",
+    "delay": "^5.0.0",
+    "express": "^4.18.2",
+    "express-ws": "^5.0.2",
+    "moment": "^2.29.4",
+    "mongoist": "^2.5.6",
+    "node-binance-api": "^0.13.1",
+    "nodemon": "^2.0.20",
+    "request": "^2.88.2",
+    "stock-technical-indicators": "^2.0.1",
+    "stockmarket-indicator": "^1.0.7",
+    "ta.js": "^1.12.1",
+    "technicalindicators": "^3.1.0"
+  }
+}

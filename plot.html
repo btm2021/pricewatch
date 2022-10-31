@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <style>
+        #tvchart{
+            position: absolute;
+            width: 90vw;
+            height: 90vh;
+        }
+    </style>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Indicators</title>
+</head>
+<body>
+    <div id="tvchart"></div>
+
+    <div id="tvchart2"></div>
+</body>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+  const { log, error } = console;
+
+const getData = async () => {
+  const resp = await fetch('/bb');
+  const data = await resp.json();
+  return data;
+};
+
+// getData();
+const renderChart = async () => {
+  const chartProperties = {
+    timeScale: {
+                borderColor: "rgb(225, 226, 227)"
+            },
+           
+  
+  };
+  const domElement = document.getElementById('tvchart');
+  const chart = LightweightCharts.createChart(domElement, chartProperties);
+  const candleseries = chart.addCandlestickSeries();
+  const klinedata = await getData();
+  candleseries.setData(klinedata);
+  const sma_series = chart.addLineSeries({ color: 'Fuchsia', lineWidth: 2 });
+  const ema_10 = chart.addLineSeries({ color: 'blue', lineWidth: 1 });
+  const ema_50 = chart.addLineSeries({ color: 'green', lineWidth: 1});
+  //const psar = chart.addLineSeries({color:'red',lineWidth:2,lineStyle:1})
+  let dataMarket = klinedata
+      .filter((d) => d.signal)
+      .map((d)=>{
+        let signal = d.signal;
+        if(signal!=0){
+          let signal = d.signal;
+          let time = d.time;
+         let position=(signal.Direction>0)?"belowBar":"belowBar"
+          let color=(signal.Direction>0)?"green":"red"
+          let shape=(signal.Direction>0)?"arrowUp":"arrowDown"
+          let text=(signal.Direction>0)?"LONG":"SHORT"
+          return {
+              time,
+              position,
+              color,
+              shape,
+              text
+          }
+        }
+      })
+  candleseries.setMarkers(
+    klinedata
+      .filter((d) => d.signal)
+      .map((d)=>{
+        let signal = d.signal;
+        if(signal!=0){
+          let signal = d.signal;
+          let time = d.time;
+         let position=(signal.Direction>0)?"belowBar":"aboveBar"
+          let color=(signal.Direction>0)?"green":"red"
+          let shape=(signal.Direction>0)?"arrowUp":"arrowDown"
+          let text=(signal.Direction>0)?"LONG "+d.close:"SHORT "+d.close
+        
+          return {
+              time,
+              position,
+              color,
+              shape,
+              text
+          }
+        }
+      })
+  )
+  //const sma_seriesDown = chart.addLineSeries({ color: 'green', lineWidth: 2 });
+  const sma_data = klinedata
+    .filter((d) => d.st)
+    .map((d) => ({ time: d.time, value: d.st.ActiveTrend }));
+  const ema10 = klinedata
+    .filter((d) => d.st)
+    .map((d) => ({ time: d.time, value: d.ema10 }));
+  const ema50 = klinedata
+    .filter((d) => d.st)
+    .map((d) => ({ time: d.time, value: d.ema50 }));
+  const psarData  = klinedata.filter((d)=>d.psar).map(d=>({time:d.time,value:d.psar}))
+  sma_series.setData(sma_data);
+ // psar.setData(psarData)
+  ema_10.setData(ema10);
+//  ema_50.setData(ema50);
+  //sma_seriesDown.setData(sma_dataDown);
+  //SMA
+  //RSI
+}
+renderChart();
+</script>
+</html>
