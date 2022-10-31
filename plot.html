@@ -4,8 +4,8 @@
     <style>
         #tvchart{
             position: absolute;
-            width: 90vw;
-            height: 90vh;
+            width: 99vw;
+            height: 99vh;
         }
     </style>
     <meta charset="UTF-8">
@@ -20,25 +20,53 @@
 </body>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <script>
+  var chart;
+ 
   const { log, error } = console;
-
+  var timeframe;
+  var name;
+  var type;
+  getParameters();
+  function getParameters() {
+    const params = new URLSearchParams(window.location.search);
+     timeframe =params.get('timeframe')
+     name = params.get('name')
+     type=params.get('type')
+    }
 const getData = async () => {
-  const resp = await fetch('/bb');
+  getParameters() 
+  let url=`/getOne?timeframe=${timeframe}&name=${name}&type=${type}`
+  const resp = await fetch(url);
   const data = await resp.json();
-  return data;
+  let _data=[]
+  data.map(i=>{
+    i.time=i.time/1000
+  _data.push({...i})
+  })
+  return _data;
 };
-
 // getData();
 const renderChart = async () => {
   const chartProperties = {
     timeScale: {
-                borderColor: "rgb(225, 226, 227)"
+                borderColor: "rgb(225, 226, 227)",
+                timeVisible:true,
             },
+            watermark: {
+        visible: true,
+        fontSize: 50,
+        horzAlign: 'center',
+        vertAlign: 'center',
+        color: 'rgba(171, 71, 188, 0.5)',
+        text: `${name}-${timeframe}-${type}`,
+    },
            
-  
   };
   const domElement = document.getElementById('tvchart');
   const chart = LightweightCharts.createChart(domElement, chartProperties);
+  window.addEventListener('resize', () => {
+    chart.resize(window.innerWidth, window.innerHeight);
+});
   const candleseries = chart.addCandlestickSeries();
   const klinedata = await getData();
   candleseries.setData(klinedata);
@@ -71,13 +99,14 @@ const renderChart = async () => {
       .filter((d) => d.signal)
       .map((d)=>{
         let signal = d.signal;
+
         if(signal!=0){
           let signal = d.signal;
           let time = d.time;
          let position=(signal.Direction>0)?"belowBar":"aboveBar"
           let color=(signal.Direction>0)?"green":"red"
           let shape=(signal.Direction>0)?"arrowUp":"arrowDown"
-          let text=(signal.Direction>0)?"LONG "+d.close:"SHORT "+d.close
+          let text=(signal.Direction>0)?`LONG@E:${signal.entryOrder.entryPrice} SL:${signal.entryOrder.slPrice} TP:${signal.entryOrder.tpPrice}`:`SHORT@E:${signal.entryOrder.entryPrice} SL:${signal.entryOrder.slPrice} TP:${signal.entryOrder.tpPrice}`
         
           return {
               time,

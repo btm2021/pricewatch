@@ -3,6 +3,7 @@ const app = express()
 const port = 3000
 const request = require('request')
 var wsClientList = [];
+var fs = require('fs')
 var compression = require('compression')
 const cors = require('cors')
 const enableWs = require('express-ws')
@@ -18,7 +19,7 @@ app.use(bodyParser.json())
 app.ws('/ws', (ws, req) => {
     wsClientList.push(ws);
     ws.on('message', msg => {
-
+        sendMessageToWS("hello")
     })
     ws.on('close', () => {
         wsClientList = wsClientList.filter(item => { item === ws })
@@ -28,7 +29,7 @@ app.ws('/ws', (ws, req) => {
 app.get('/', (req, res) => {
     res.send({ hello: "world" })
 })
-app.get('/b', (req, res) => {
+app.get('/plot', (req, res) => {
     res.sendFile(__dirname + '/plot.html');
 })
 app.get('/bb', (req, res) => {
@@ -41,8 +42,10 @@ app.get('/bb', (req, res) => {
 })
 app.get('/getOne', (req, res) => {
     let { name, type, timeframe } = req.query
-    priceDB.find({ name, type, timeframe }).then(data => {
-        res.send(data)
+    let fileName = `${type}_${name}_${timeframe}.json`
+    fs.readFile(fileName, 'utf8', (err, data) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(data);
     })
 })
 app.get('/getAll', (req, res) => {
@@ -122,18 +125,18 @@ var IndicatorConfig = {
     ListBANSymbol: ['1000', '_', 'LUNA2', 'FOOT'],
     noti: [{ userid: 'baotm', code: 726624 }],
     signal: {
-        emaPeriod: 50,
+        emaPeriod: 30,
         spPeriod: 13,
         spMul: 3,
         psarMaxCount: 4,
         psarStep: 0.02,
-        psarMax: 2
+        psarMax: 0.02
     },
-    minVolume: 3,
+    minVolume: 2,
     levager: 25,
     minROE: 30,
     volumeSensor: 3,
-    timeOut: 20,
+    timeOut: 50,
     timeframe: '15m'
 
 }
@@ -407,6 +410,14 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             msg
         })
     }
+    let fileName = `future_${name}_${timeframe}.json`
+    fs.writeFile(fileName, JSON.stringify(result), function (err) {
+        if (err) {
+            return console.log(err);
+        }
+        console.log(`[${countMain}] [${count}]  ${new Date()} ${fileName} write  ${name}  complete `);
+    });
+
     //send to db
     oneInsert({
         name,
@@ -435,12 +446,10 @@ async function getIndicator(tick, name, timeframe) {
         let dataCloseTime = []
         let dataCloseVolumeTime = []
         tick.map(i => {
-
             let [time, open, high, low, close, volume, closeTime, assetVolume, trades, buyBaseVolume, buyAssetVolume, ignored] = i;
             dataTime.push({
                 time, close
             })
-
             dataSuperTrend.push([
                 new Date(time),
                 parseFloat(open),
@@ -543,7 +552,7 @@ async function getData(symbol, time) {
                     }
 
                 }
-            }, { limit: 1000 })
+            })
         }
         catch (err) {
             console.log('**** fetch error - limit IP')
