@@ -137,7 +137,7 @@ var IndicatorConfig = {
     levager: 25,
     minROE: 30,
     volumeSensor: 3,
-    timeOut: 50,
+    timeOut: 20,
     timeframe: '15m'
 
 }
