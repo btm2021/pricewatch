@@ -10,6 +10,7 @@ const cors = require('cors')
 const enableWs = require('express-ws')
 var bodyParser = require('body-parser')
 var exchangeInfo = null;
+var logMessage = new Map()
 var count = 1;
 countMain = 1;
 enableWs(app)
@@ -53,6 +54,9 @@ app.get('/getAll', (req, res) => {
     priceDB.find({}).then(data => {
         res.send(data)
     })
+})
+app.get('/getLog', (req, res) => {
+    res.send(Object.fromEntries(logMessage))
 })
 app.get('/listSupport', (req, res) => {
     let { type } = req.query
@@ -414,6 +418,12 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             type: 'alert',
             msg
         })
+        let uniqueName = `${name}_${timeframe}_${side}_${barTime}`
+        logMessage.set(uniqueName,
+            {
+                signal: currentSignal,
+                msg
+            })
     }
     let fileName = `future_${name}_${timeframe}.json`
     fs.writeFile(fileName, JSON.stringify(result), function (err) {
@@ -629,7 +639,6 @@ async function getFuturePrice(timeframe) {
 
 }
 function main() {
-
     getFuturePrice(IndicatorConfig.timeframe)
 }
 main();
