@@ -1,6 +1,7 @@
 const express = require('express')
 const app = express()
 const port = 3000
+const moment = require('moment')
 const request = require('request')
 var wsClientList = [];
 var fs = require('fs')
@@ -125,7 +126,7 @@ var IndicatorConfig = {
     ListBANSymbol: ['1000', '_', 'LUNA2', 'FOOT'],
     noti: [{ userid: 'baotm', code: 726624 }],
     signal: {
-        emaPeriod: 30,
+        emaPeriod: 20,
         spPeriod: 13,
         spMul: 3,
         psarMaxCount: 4,
@@ -332,6 +333,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             let close = data[index].close
             let high = data[index].high
             let low = data[index].low
+            let barTime = moment(data[index].time).format('DD/MM HH:mm ')
             let side = (_signal.st.Supertrend.Direction > 0) ? "LONG" : "SHORT"
 
             //check supertrend trước cùng trend thì bỏ qua
@@ -360,6 +362,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                             entryPrice: formatPrice((high + low) / 2, name),//entryPrice = high+close /2
                             tpPrice: getTP(side, (high + low) / 2, name),
                             slPrice: formatPrice(spCurrent.ActiveTrend, name),
+                            barTime,
                         }
 
                     }
@@ -382,6 +385,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                             entryPrice: (high + low) / 2,//entryPrice = high+close /2
                             tpPrice: getTP(side, (high + low) / 2, name),
                             slPrice: spCurrent.ActiveTrend,
+                            barTime
                         }
                     }
                 }
@@ -395,15 +399,16 @@ function mybot(data, name, timeframe, dataSuperTrend) {
     })
     //ghi lên db 
     //Kiểm tra lastSignal
-    let currentSignal = result[result.length - 1].signal;
+    let currentSignal = result[result.length - 2].signal;
     //*test
     // currentSignal = result.filter(i => i.signal != 0)
     // currentSignal = currentSignal[currentSignal.length - 1]
     // currentSignal = currentSignal.signal
     //end test
     if (currentSignal != 0) {
-        let { name, side, entryPrice, tpPrice, slPrice } = currentSignal.entryOrder
-        let msg = `${side} ${name} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice}`
+
+        let { name, side, entryPrice, tpPrice, slPrice, barTime } = currentSignal.entryOrder
+        let msg = `${barTime} ${side} ${name} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice} `
         sendMessageToWS({
             cataloge: 'bot',
             type: 'alert',
@@ -416,19 +421,11 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             return console.log(err);
         }
         console.log(`[${countMain}] [${count}]  ${new Date()} ${fileName} write  ${name}  complete `);
+        count++;
     });
 
     //send to db
-    oneInsert({
-        name,
-        timeframe,
-        type: 'future',
-        time: (new Date()).valueOf(),
-        priceList: JSON.stringify(result)
-    }).then(data => {
-        console.log(`[${countMain}] [${count}]  ${new Date()} write  ${name}  complete `)
-        count++;
-    })
+
 }
 var alertList = []
 async function getIndicator(tick, name, timeframe) {
