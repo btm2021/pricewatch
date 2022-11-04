@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <style>
+        #tvchart {
+            width: 70%;
+            float: left;
+            height: 99vh;
+        }
+
+        #backtestpanel {
+            width: 29%;
+            float: right;
+            height: 95vh;
+            border: 1px solid black;
+        }
+
+        tbody {
+            border: 1px solid black;
+        }
+    </style>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Indicators</title>
+</head>
+
+<body>
+    <div>
+
+        <div id="tvchart"></div>
+
+        <div id="backtestpanel">
+            <h4 style="text-align: center">Cấu hình bot</h4>
+
+            <table style="width:100%;text-align:center" border="0">
+                <tbody>
+                    <tr>
+                        <td>Symbol</td>
+                        <td>
+
+                            <select onchange="changeSymbol()" id="symbols">
+
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>EMA</td>
+                        <td><input id="c_ema"></td>
+                    </tr>
+                    <tr>
+                        <td>PSAR Count</td>
+                        <td><input id="c_psarcount"></td>
+                    </tr>
+                    <tr>
+                        <td>PSAR Max</td>
+                        <td><input id="c_psarmax"></td>
+                    </tr>
+                    <tr>
+                        <td>PSAR Step</td>
+                        <td><input id="c_psarstep"></td>
+                    </tr>
+                    <tr>
+                        <td>Supertrend Period</td>
+                        <td><input id="c_spp">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Supertrend Mul</td>
+                        <td><input id="c_sm">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>ROE% TP</td>
+                        <td><input id="c_roe">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Timeframe </td>
+                        <td><input id="c_tf">
+                        </td>
+                    </tr>
+                    <tr>
+                        <td colspan="2">
+                            <br />
+                            <button onclick="reTest()">Retest</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <hr />
+            <h4 style="text-align: center">Danh sách lệnh</h4>
+            <table style="width:100%;text-align: center;" border="1">
+                <thead>
+                    <tr>
+                        <th>Side</th>
+                        <th>Time</th>
+                        <th>Entry</th>
+                        <th>TP</th>
+                        <th>SL</th>
+                        <th>Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="tableBackTest">
+
+                </tbody>
+            </table>
+            <hr />
+            <div>
+                <div style="width:48%;float:left">
+                    <ul id="chitietorderDiv">
+
+                    </ul>
+                </div>
+
+
+                <div style="width:48%;float:right">
+                    <ul id="chitietorderDiv1">
+
+                    </ul>
+                </div>
+
+            </div>
+        </div>
+    </div>
+</body>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+    var layout = 70;
+    var listLenh = []
+    var listViThe = []
+    var dataRaw = []
+    var chart;
+    const { log, error } = console;
+    var timeframe;
+    var name;
+    var type;
+    var listSymbolSupport = null;
+    var exchangeInfo = null
+    var indicatorConfig = null
+    var botConfig = {
+        emaPeriod: 20,
+        psarMax: 0.02,
+        psarMaxCount: 4,
+        psarStep: 0.02,
+        spMul: 3,
+        spPeriod: 13,
+        minROE: 30,
+        timeframe: '15m',
+        symbol: 'BTCUSDT'
+    }
+    function reTest() {
+        location.replace(`?name=${name}`);
+    }
+    function setBotConfig() {
+
+        document.getElementById("c_ema").value = botConfig.emaPeriod
+        document.getElementById("c_psarmax").value = botConfig.psarMax
+        document.getElementById("c_psarcount").value = botConfig.psarMaxCount
+        document.getElementById("c_psarstep").value = botConfig.psarStep
+        document.getElementById("c_sm").value = botConfig.spMul
+        document.getElementById("c_spp").value = botConfig.spPeriod
+        document.getElementById("c_roe").value = botConfig.minROE
+        document.getElementById("c_tf").value = botConfig.timeframe
+
+    }
+    function changeSymbol() {
+        let value = this.document.getElementById("symbols").value
+        name = value;
+    }
+    getParameters();
+    function formatPrice(price, name1) {
+        let _name = name1 || name
+        let symbol = exchangeInfo.symbols.find(i => i.symbol === _name)
+
+        let pricePrecision = symbol.pricePrecision
+        return parseFloat(String(price.toFixed(pricePrecision)))
+    }
+    function chitietorder(index) {
+        let order = listLenh[index]
+        let str = '';
+        str += `
+        
+        <li>Time : ${order.entryOrder.barTime}</li>
+       <li>Side : ${order.entryOrder.side}</li>
+       <li>Entry : ${formatPrice(order.entryOrder.entryPrice)}</li>
+       <li>Takeprofit : ${formatPrice(order.entryOrder.tpPrice)}</li>
+       <li>StopLoss : ${formatPrice(order.entryOrder.slPrice)}</li>
+        `
+        let str1 = '';
+        str1 += `
+        <li>Tình trạng:${(order.status.win) ? "Thắng" : "Thua"}</li>
+       <li>${(order.status.win) ? "Thắng" : "Thua"} sau ${order.status.countBar} cây</li>
+       <li>Giá chốt cây ${(order.status.win) ? "Thắng" : "Thua"} : ${formatPrice(order.status.priceStatus.close)}</li>
+       ${(order.status.win) ? "" : "     <li>Nên đặt vào điểm giá tại fibo gần nhất</li>"}
+  
+     `
+        document.getElementById("chitietorderDiv").innerHTML = str;
+        document.getElementById("chitietorderDiv1").innerHTML = str1;
+        console.log(order)
+    }
+    function danhsachlenhtable(data) {
+        let str = ''
+        data.map((item, index) => {
+
+            str += `<tr><td><a href="#" onclick="chitietorder(${index})">${(item.entryOrder.side) ? item.entryOrder.side : ""}</a></td>
+                 <td>${item.entryOrder.barTime}</td>
+                        <td>${formatPrice(item.entryOrder.entryPrice, name)}</td>
+                        <td>${formatPrice(item.entryOrder.tpPrice, name)}</td>
+                        <td>${formatPrice(item.entryOrder.slPrice, name)}</td>
+                        <td>${calcStatusOrder(item.entryOrder, index)}</td></tr>`
+
+        })
+        document.getElementById("tableBackTest").innerHTML += str
+
+    }
+    function calcStatusOrder(order, index) {
+        let { barTime, side, entryPrice, tpPrice, slPrice, rawTime } = order;
+        //* lọc ra các mốc giá kể từ rawTime và nhỏ hơn điểm entry tiếp theo
+        //* tìm ra điểm entry tiếp theo
+        let listDataAfterOrder = []
+        if (index < listLenh.length - 1) {
+            //có 1 entry khác
+            let nextEntry = listLenh[index + 1].entryOrder.rawTime
+            listDataAfterOrder = dataRaw.filter(i => {
+                return (i.time * 1000 <= nextEntry && i.time * 1000 >= rawTime)
+            })
+        } else {
+            //không có entry
+            listDataAfterOrder = dataRaw.filter(i => {
+                return (i.time * 1000 >= rawTime)
+            })
+        }
+        //bỏ element đầu tiên
+        listDataAfterOrder.shift();
+
+        let objectOrder = {
+            win: false,
+            priceStatus: null,
+            countBar: 0,
+        }
+        //tìm ra điểm tp sl gần gấn
+        let tpIndex = 0
+        let slIndex = 0;
+
+        //tại cây đó giá nằm trong high và low, 
+        if (side === "LONG") {
+            tpIndex = listDataAfterOrder.findIndex(i => tpPrice >= i.close)
+            slIndex = listDataAfterOrder.findIndex(i => slPrice <= i.close)
+            if (tpIndex > slIndex) {
+                objectOrder.win = true;
+                objectOrder.countBar = tpIndex + 1
+                objectOrder.priceStatus = listDataAfterOrder[tpIndex]
+
+            } else {
+                objectOrder.countBar = slIndex + 1
+                objectOrder.priceStatus = listDataAfterOrder[slIndex]
+            }
+
+
+        } else {
+            //SHORT
+            tpIndex = listDataAfterOrder.findIndex(i => tpPrice <= i.close)
+            slIndex = listDataAfterOrder.findIndex(i => slPrice >= i.close)
+            if (tpIndex > slIndex) {
+                objectOrder.win = true;
+                objectOrder.countBar = tpIndex + 1
+                objectOrder.priceStatus = listDataAfterOrder[tpIndex]
+            } else {
+                priceStatus = listDataAfterOrder[slIndex]
+                objectOrder.countBar = slIndex + 1
+                objectOrder.priceStatus = listDataAfterOrder[slIndex]
+            }
+        }
+        listLenh[index].status = objectOrder;
+        return (objectOrder.win) ? "Thắng" : "Thua"
+
+    }
+    function getParameters() {
+
+        const params = new URLSearchParams(window.location.search);
+        timeframe = params.get('timeframe')
+        timeframe = "15m"
+        name = params.get('name')
+        //   name = "KLAYUSDT"
+        type = params.get('type')
+        type = "future"
+    }
+    function setListSupport(list) {
+        let str = ``;
+        console.log(list)
+        list.forEach(item => {
+            str += `<option value="${item.symbol}">${item.symbol}</option>`
+
+        })
+        document.getElementById("symbols").innerHTML = str
+    }
+    const getData = async () => {
+        var rep_listSymbolSupport = await fetch('/listsymbolsupport')
+        listSymbolSupport = await rep_listSymbolSupport.json();
+        setListSupport(listSymbolSupport);
+        var rep_indicatorConfig = await fetch('/backtest_getconfig');
+        indicatorConfig = await rep_indicatorConfig.json();
+        setBotConfig();
+        var rep_exchangeInfo = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo')
+        exchangeInfo = await rep_exchangeInfo.json()
+
+        getParameters()
+        let url = `/getOne?timeframe=${timeframe}&name=${name}&type=${type}`
+        const resp = await fetch(url);
+        const data = await resp.json();
+        let _data = []
+        data.map(i => {
+            i.time = i.time / 1000
+            _data.push({ ...i })
+        })
+        _data.filter((d) => d.signal)
+            .map((d) => {
+                let signal = d.signal;
+                if (signal != 0) {
+                    listLenh.push(signal)
+
+                }
+            })
+        dataRaw = data;
+        danhsachlenhtable(listLenh)
+
+        return _data;
+    };
+    // getData();
+    const renderChart = async () => {
+        const chartProperties = {
+            timeScale: {
+                borderColor: "rgb(225, 226, 227)",
+                timeVisible: true,
+            },
+            watermark: {
+                visible: true,
+                fontSize: 50,
+                horzAlign: 'center',
+                vertAlign: 'center',
+                color: 'rgba(171, 71, 188, 0.5)',
+                text: `${name}-${timeframe}-${type}`,
+            },
+
+        };
+        const domElement = document.getElementById('tvchart');
+        const chart = LightweightCharts.createChart(domElement, chartProperties);
+        window.addEventListener('resize', () => {
+            chart.resize(window.innerWidth * 0.7, window.innerHeight);
+        });
+        const candleseries = chart.addCandlestickSeries();
+        const klinedata = await getData();
+        candleseries.setData(klinedata);
+        const sma_series = chart.addLineSeries({ color: 'Fuchsia', lineWidth: 2 });
+        const ema_10 = chart.addLineSeries({ color: 'blue', lineWidth: 1 });
+        const ema_50 = chart.addLineSeries({ color: 'green', lineWidth: 1 });
+        //const psar = chart.addLineSeries({color:'red',lineWidth:2,lineStyle:1})
+        let dataMarket = klinedata
+            .filter((d) => d.signal)
+            .map((d) => {
+                let signal = d.signal;
+                if (signal != 0) {
+                    let signal = d.signal;
+                    let time = d.time;
+                    let position = (signal.Direction > 0) ? "belowBar" : "belowBar"
+                    let color = (signal.Direction > 0) ? "green" : "red"
+                    let shape = (signal.Direction > 0) ? "arrowUp" : "arrowDown"
+                    let text = (signal.Direction > 0) ? "LONG" : "SHORT"
+                    return {
+                        time,
+                        position,
+                        color,
+                        shape,
+                        text
+                    }
+                }
+            })
+        candleseries.setMarkers(
+            klinedata
+                .filter((d) => d.signal)
+                .map((d) => {
+                    let signal = d.signal;
+
+                    if (signal != 0) {
+                        let signal = d.signal;
+                        let time = d.time;
+                        let position = (signal.Direction > 0) ? "belowBar" : "aboveBar"
+                        let color = (signal.Direction > 0) ? "green" : "red"
+                        let shape = (signal.Direction > 0) ? "arrowUp" : "arrowDown"
+                        let text = (signal.Direction > 0) ? `LONG@E:${formatPrice(signal.entryOrder.entryPrice, name)} SL:${formatPrice(signal.entryOrder.slPrice, name)} TP:${formatPrice(signal.entryOrder.tpPrice, name)}` : `SHORT@E:${formatPrice(signal.entryOrder.entryPrice, name)} SL:${formatPrice(signal.entryOrder.slPrice, name)} TP:${formatPrice(signal.entryOrder.tpPrice, name)}`
+
+                        return {
+                            time,
+                            position,
+                            color,
+                            shape,
+                            text
+                        }
+                    }
+                })
+        )
+        //const sma_seriesDown = chart.addLineSeries({ color: 'green', lineWidth: 2 });
+        const sma_data = klinedata
+            .filter((d) => d.st)
+            .map((d) => ({ time: d.time, value: d.st.ActiveTrend }));
+        const ema10 = klinedata
+            .filter((d) => d.st)
+            .map((d) => ({ time: d.time, value: d.ema10 }));
+        const ema50 = klinedata
+            .filter((d) => d.st)
+            .map((d) => ({ time: d.time, value: d.ema50 }));
+        const psarData = klinedata.filter((d) => d.psar).map(d => ({ time: d.time, value: d.psar }))
+        sma_series.setData(sma_data);
+        // psar.setData(psarData)
+        ema_10.setData(ema10);
+        //  ema_50.setData(ema50);
+        //sma_seriesDown.setData(sma_dataDown);
+        //SMA
+        //RSI
+    }
+    renderChart();
+</script>
+
+</html>

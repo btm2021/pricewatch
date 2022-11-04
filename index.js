@@ -12,8 +12,26 @@ var bodyParser = require('body-parser')
 var exchangeInfo = null;
 var logMessage = new Map()
 var count = 1;
+var listSymbolUse = []
 countMain = 1;
 enableWs(app)
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ port: 3030 });
+const clients = new Map();
+wss.on('connection', (ws) => {
+    console.log('client connect')
+    const id = uuidv4();
+    clients.set(ws, id);
+
+    ws.on("message", (messageAsString) => {
+        [...clients.keys()].forEach((client) => {
+            client.send('hello');
+        });
+    })
+    ws.on("close", () => {
+        clients.delete(ws);
+    });
+})
 app.use(compression())
 app.use(cors())
 app.use(bodyParser.urlencoded({ extended: false }))
@@ -34,6 +52,9 @@ app.get('/', (req, res) => {
 app.get('/plot', (req, res) => {
     res.sendFile(__dirname + '/plot.html');
 })
+app.get('/backtest', (req, res) => {
+    res.sendFile(__dirname + '/backtest.html');
+})
 app.get('/bb', (req, res) => {
 
     const fs = require("fs");
@@ -41,6 +62,10 @@ app.get('/bb', (req, res) => {
         res.setHeader('Content-Type', 'application/json');
         res.end(data);
     })
+})
+app.get('/backtest_getconfig', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(IndicatorConfig)
 })
 app.get('/getOne', (req, res) => {
     let { name, type, timeframe } = req.query
@@ -76,6 +101,9 @@ app.post('/configmybot', (req, res) => {
     IndicatorConfig.signal.psarStep = psarStep
     IndicatorConfig.levager = levager
     IndicatorConfig.minROE = minROE
+})
+app.get('/listsymbolsupport', (req, res) => {
+    res.send(listSymbolUse)
 })
 function formatListSupportJSONResult(data) {
     let result = []
@@ -120,7 +148,12 @@ async function oneInsert(data) {
         });
     })
 }
-
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 //*binance
 const Binance = require('node-binance-api');
 const binance = new Binance({
@@ -141,7 +174,7 @@ var IndicatorConfig = {
     levager: 25,
     minROE: 30,
     volumeSensor: 3,
-    timeOut: 20,
+    timeOut: 25,
     timeframe: '15m'
 
 }
@@ -216,6 +249,9 @@ function getTP(side, entryPrice, name) {
 }
 function sendMessageToWS(msg) {
     //
+    [...clients.keys()].forEach((client) => {
+        client.send(JSON.stringify(msg));
+    });
     wsClientList.forEach((ws) => {
         ws.send(JSON.stringify(msg))
     })
@@ -338,6 +374,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             let high = data[index].high
             let low = data[index].low
             let barTime = moment(data[index].time).format('DD/MM HH:mm ')
+            let rawTime = data[index].time
             let side = (_signal.st.Supertrend.Direction > 0) ? "LONG" : "SHORT"
 
             //check supertrend trước cùng trend thì bỏ qua
@@ -366,7 +403,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                             entryPrice: formatPrice((high + low) / 2, name),//entryPrice = high+close /2
                             tpPrice: getTP(side, (high + low) / 2, name),
                             slPrice: formatPrice(spCurrent.ActiveTrend, name),
-                            barTime,
+                            barTime, rawTime
                         }
 
                     }
@@ -389,7 +426,7 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                             entryPrice: (high + low) / 2,//entryPrice = high+close /2
                             tpPrice: getTP(side, (high + low) / 2, name),
                             slPrice: spCurrent.ActiveTrend,
-                            barTime
+                            barTime, rawTime
                         }
                     }
                 }
@@ -410,7 +447,6 @@ function mybot(data, name, timeframe, dataSuperTrend) {
     // currentSignal = currentSignal.signal
     //end test
     if (currentSignal != 0) {
-
         let { name, side, entryPrice, tpPrice, slPrice, barTime } = currentSignal.entryOrder
         let msg = `${barTime} ${side} ${name} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice} `
         sendMessageToWS({
@@ -559,7 +595,7 @@ async function getData(symbol, time) {
                     }
 
                 }
-            })
+            },{limit:1000})
         }
         catch (err) {
             console.log('**** fetch error - limit IP')
@@ -621,7 +657,8 @@ async function getFuturePrice(timeframe) {
                     }
                 }
                 let TokenList = []
-
+                listSymbolUse = _listPair
+                 //_listPair = [{ symbol: 'KLAYUSDT' }]
                 console.log('Begin fetch data. [' + _listPair.length + "]")
                 _listPair.forEach(i => {
                     TokenList.push(handleData(i.symbol, timeframe));
