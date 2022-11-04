@@ -595,7 +595,7 @@ async function getData(symbol, time) {
                     }
 
                 }
-            },{limit:1000})
+            })
         }
         catch (err) {
             console.log('**** fetch error - limit IP')
