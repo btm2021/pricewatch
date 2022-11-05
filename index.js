@@ -49,6 +49,10 @@ app.ws('/ws', (ws, req) => {
 app.get('/', (req, res) => {
     res.send({ hello: "world" })
 })
+app.get('/p', (req, res) => {
+    res.sendFile(__dirname + '/p.html');
+})
+
 app.get('/plot', (req, res) => {
     res.sendFile(__dirname + '/plot.html');
 })
@@ -58,7 +62,7 @@ app.get('/backtest', (req, res) => {
 app.get('/bb', (req, res) => {
 
     const fs = require("fs");
-    fs.readFile("./abc.csv", 'utf8', (err, data) => {
+    fs.readFile("./aaa.json", 'utf8', (err, data) => {
         res.setHeader('Content-Type', 'application/json');
         res.end(data);
     })
@@ -171,63 +175,115 @@ var IndicatorConfig = {
         psarMax: 0.02
     },
     minVolume: 2,
-    levager: 25,
+    levager: 20,
     minROE: 30,
     volumeSensor: 3,
     timeOut: 25,
-    timeframe: '15m'
+    timeframe: '15m',
+    countAlert: 5,
+}
+function sendMessageToWS(msg) {
+    //
+    [...clients.keys()].forEach((client) => {
+        client.send(JSON.stringify(msg));
+    });
+    wsClientList.forEach((ws) => {
+        ws.send(JSON.stringify(msg))
+    })
+    sendNotification(msg.msg)
+}
+
+function getSignal(d1, d2) {
+    //d1: ema
+    //d2: trail2
+    d1.splice(0, d1.length - d2.length);
+    var cross = (d1[0] > d2[0]), indexes = [];
+    for (var i = 0; i < d1.length; i++) {
+        if (d1[i] < d2[i] && cross) {
+            indexes.push({ index: i, cross: false, signal: 'SHORT' });
+            cross = false;
+        }
+        if (d1[i] > d2[i] && !cross) {
+            indexes.push({ index: i, cross: true, signal: 'LONG' });
+            cross = true;
+        }
+    }
+
+    return indexes;
+}
+
+function mybot1(dataClose, dataFull, name, timeframe) {
+    let period = 14
+    const EMA = require('technicalindicators').EMA
+    let ema14 = EMA.calculate({ period, values: dataClose })
+    let t2 = Array(ema14.length)
+    for (let i = 1; i < ema14.length - 1; i++) {
+        let t1 = ema14[i]
+        let sl = t1 * 0.02
+        let iff1 = (t1 > nz(t2[i - 1])) ? t1 - sl : t1 + sl
+        let iff2 = (t1 < nz(t2[i - 1]) && ema14[i - 1] < nz(t2[i - 1])) ? Math.min(nz(t2[i - 1]), t1 + sl) : iff1
+        let iff3 = (t1 > nz(t2[i - 1]) && ema14[i - 1] > nz(t2[i - 1])) ? Math.max(nz(t2[i - 1]), t1 - sl) : iff2
+        t2[i] = iff3
+    }
+    let t1 = ema14;
+    for (let i = 0; i < period - 1; i++) {
+        t2[i] = 0;
+        t1.unshift(0)
+        t2.unshift(0)
+    }
+    let signal = getSignal(t1, t2)
+    let lastSignal = signal[signal.length - 1]
+    if ((dataClose.length - lastSignal.index) <= IndicatorConfig.countAlert) {
+        //trong vòng 5 cây thì báo
+
+        let currentSignal = lastSignal;
+        let entryPrice = formatPrice(((dataFull[currentSignal.index].close + dataFull[currentSignal.index].low) / 2), name)
+        let slPrice = formatPrice(t2[currentSignal.index + 1], name)
+        let tpPrice = getTP(currentSignal.signal, entryPrice, name)
+        let time = moment(dataFull[currentSignal.index].time).format('DD-MM HH:mm')
+        let msg = `${time} ${currentSignal.signal} ${name} ${timeframe} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice}`
+        sendMessageToWS({
+            cataloge: 'bot',
+            type: 'alert',
+            msg
+        })
+    }
+
+    let fullData = []
+    dataFull.map((i, index) => {
+        let isSignal = signal.find(i => i.index === index)
+        let _signal = null;
+        if (isSignal) {
+            _signal = isSignal
+            _signal.entry = (dataFull[index].close + dataFull[index].low) / 2
+            _signal.sl = t2[index + 1]
+            _signal.tp = 1;
+        }
+        fullData.push({
+            ...dataFull[index], t1: t1[index], t2: t2[index], signal: _signal
+        })
+    })
+    let fileName = `future_${name}_${timeframe}.json`
+    fs.writeFile(fileName, JSON.stringify(fullData), function (err) {
+        if (err) {
+            return console.log(err);
+        } else {
+            console.log(`Write ${fileName} done!`)
+        }
+    });
 
 }
-var ListBANSymbol = ['LUNA', '1000']
-function getListBinanceSupport() {
-    binance.futuresExchangeInfo().then(rawFuturesExchangeInfo => {
-        if (rawFuturesExchangeInfo) {
-            let listAsset = rawFuturesExchangeInfo.symbols;
-            let listSymbolNotIncluceBUSD = listAsset.filter(pair => {
-                return (!ListBANSymbol.includes(pair.symbol) && !(pair.symbol.includes("BUSD")) && !(pair.symbol.includes("_")))
-            })
-            let listSupport = []
-            listSymbolNotIncluceBUSD.map(item => {
-                listSupport.push({ symbol: item.symbol, exchangeInfo: item })
-            })
-            let type = 'future'
-            let time = (new Date()).valueOf();
-            db.symbolSupport.findAndModify({
-                query: { id: '1', type },
-                update: { $set: { symbol: JSON.stringify(listSupport), time, type: 'future' } },
-                upsert: true,
-            }).then(data => {
-                // console.log(data)
-            }).catch(err => {
-                console.log(err)
-            });
-        }
-    })
-    binance.exchangeInfo().then(rawFuturesExchangeInfo => {
-        if (rawFuturesExchangeInfo) {
-            let listAsset = rawFuturesExchangeInfo.symbols;
-            let listSupport = []
-            listAsset.map(item => {
-                listSupport.push({ symbol: item.symbol, exchangeInfo: item })
-            })
-            let type = 'spot'
-            let time = (new Date()).valueOf();
-            db.symbolSupport.findAndModify({
-                query: { id: '2', type },
-                update: { $set: { symbol: JSON.stringify(listSupport), time, type: 'spot', exchange: 'binance' } },
-                upsert: true,
-            }).then(data => {
-                //console.log(data)
-            }).catch(err => {
-                console.log(err)
-            });
-            setTimeout(() => {
-                getListBinanceSupport();
-            }, 1000 * IndicatorConfig.timeOut * 50)
 
-        }
-    })
+function formatPrice(price, name) {
+    let symbolInfo = exchangeInfo.find(i => i.symbol === name)
 
+    if (symbolInfo) {
+        let pricePrecision = symbolInfo.pricePrecision
+        return parseFloat(String(price.toFixed(pricePrecision)))
+    } else {
+        console.log('write fail at ' + name)
+        return price;
+    }
 }
 function getTP(side, entryPrice, name) {
     //Takeprofit = 30% ROE x25
@@ -247,232 +303,208 @@ function getTP(side, entryPrice, name) {
     return formatPrice(tpPrice, name);
 
 }
-function sendMessageToWS(msg) {
-    //
-    [...clients.keys()].forEach((client) => {
-        client.send(JSON.stringify(msg));
-    });
-    wsClientList.forEach((ws) => {
-        ws.send(JSON.stringify(msg))
-    })
-    sendNotification(msg.msg)
-}
-
-function superTrend(data, period, multiplier, name, timeframe) {
-    var Stock = require("stock-technical-indicators")
-    const Indicator = Stock.Indicator
-    const { Supertrend } = require("stock-technical-indicators/study/Supertrend")
-    const newStudyATR = new Indicator(new Supertrend());
-    let a = (newStudyATR.calculate(data, { period, multiplier }))
-    //
-    return a;
-}
-function formatPrice(price, name) {
-    let symbolInfo = exchangeInfo.find(i => i.symbol === name)
-
-    if (symbolInfo) {
-        let pricePrecision = symbolInfo.pricePrecision
-        return parseFloat(String(price.toFixed(pricePrecision)))
+function nz(val) {
+    if (!val) {
+        return 0
     } else {
-        console.log('write fail at ' + name)
-        return price;
+        return val
     }
 }
-function mybot(data, name, timeframe, dataSuperTrend) {
-    //* tính psar
-    let high = []
-    let low = []
-    let dataClosePSAR = []
+// function mybot(data, name, timeframe, dataSuperTrend) {
+//     //* tính psar
+//     let high = []
+//     let low = []
+//     let dataClosePSAR = []
 
-    data.map(item => {
-        dataClosePSAR.push(item.close)
-        high.push(item.high)
-        low.push(item.low)
-    })
-    let step = IndicatorConfig.signal.psarStep
-    let max = IndicatorConfig.signal.psarMax
+//     data.map(item => {
+//         dataClosePSAR.push(item.close)
+//         high.push(item.high)
+//         low.push(item.low)
+//     })
+//     let step = IndicatorConfig.signal.psarStep
+//     let max = IndicatorConfig.signal.psarMax
 
-    let PSAR = require('technicalindicators').PSAR;
-    let _psar = PSAR.calculate({ high, low, step, max })
-    //check _psar change, kiểm tra giá psar cây trước đó, nếu cây trước đó đang nằm dưới giá mà cây hiện tại trên giá thì gọi là 
-    //chuyển chuyển trend từ up sang down
-    let __psar = []
-    let barCount = 1;
-    for (let i = 1; i < _psar.length; i++) {
-        let lastPsar = _psar[i - 1]
-        let currentPsar = _psar[i]
-        let lastClose = dataClosePSAR[i - 1]
-        let currentClose = dataClosePSAR[i]
-        let lastTrend = (lastClose > lastPsar) ? 1 : -1
-        let currentTrend = (currentClose > currentPsar) ? 1 : -1
-        if (lastTrend != currentTrend) {
-            __psar.push({
-                psar: currentPsar,
-                trend: currentTrend,
-                isStartTrend: true,
-                index: i,
-                close: currentClose,
-                barCount: 1
-            })
-            barCount = 1;
-        } else {
-            __psar.push({
-                psar: currentPsar,
-                trend: currentTrend,
-                isStartTrend: false,
-                index: i,
-                close: currentClose,
-                barCount
-            })
-            barCount++;
-        }
-    }
-    __psar.unshift(0)
-    //* tính ema14,
-    let st = superTrend(dataSuperTrend, IndicatorConfig.signal.spPeriod, IndicatorConfig.signal.spMul, name, timeframe)
-    const EMA = require('technicalindicators').EMA
-    let period = IndicatorConfig.signal.emaPeriod;
-    let dataClose = []
-    data.map(item => {
-        dataClose.push((item.high + item.low) / 2)
-    })
-    let ema10 = EMA.calculate({ period: period, values: dataClose })
-    let ema50 = EMA.calculate({ period: 100, values: dataClose })
+//     let PSAR = require('technicalindicators').PSAR;
+//     let _psar = PSAR.calculate({ high, low, step, max })
+//     //check _psar change, kiểm tra giá psar cây trước đó, nếu cây trước đó đang nằm dưới giá mà cây hiện tại trên giá thì gọi là 
+//     //chuyển chuyển trend từ up sang down
+//     let __psar = []
+//     let barCount = 1;
+//     for (let i = 1; i < _psar.length; i++) {
+//         let lastPsar = _psar[i - 1]
+//         let currentPsar = _psar[i]
+//         let lastClose = dataClosePSAR[i - 1]
+//         let currentClose = dataClosePSAR[i]
+//         let lastTrend = (lastClose > lastPsar) ? 1 : -1
+//         let currentTrend = (currentClose > currentPsar) ? 1 : -1
+//         if (lastTrend != currentTrend) {
+//             __psar.push({
+//                 psar: currentPsar,
+//                 trend: currentTrend,
+//                 isStartTrend: true,
+//                 index: i,
+//                 close: currentClose,
+//                 barCount: 1
+//             })
+//             barCount = 1;
+//         } else {
+//             __psar.push({
+//                 psar: currentPsar,
+//                 trend: currentTrend,
+//                 isStartTrend: false,
+//                 index: i,
+//                 close: currentClose,
+//                 barCount
+//             })
+//             barCount++;
+//         }
+//     }
+//     __psar.unshift(0)
+//     //* tính ema14,
+//     let st = superTrend(dataSuperTrend, IndicatorConfig.signal.spPeriod, IndicatorConfig.signal.spMul, name, timeframe)
+//     const EMA = require('technicalindicators').EMA
+//     let period = IndicatorConfig.signal.emaPeriod;
+//     let dataClose = []
+//     data.map(item => {
+//         dataClose.push((item.high + item.low) / 2)
+//     })
+//     let ema10 = EMA.calculate({ period: period, values: dataClose })
+//     let ema50 = EMA.calculate({ period: 100, values: dataClose })
 
-    for (let i = 0; i < period - 1; i++) {
-        ema10.unshift(0)
-    }
-    for (let i = 0; i < 100 - 1; i++) {
-        ema50.unshift(0)
-    }
+//     for (let i = 0; i < period - 1; i++) {
+//         ema10.unshift(0)
+//     }
+//     for (let i = 0; i < 100 - 1; i++) {
+//         ema50.unshift(0)
+//     }
 
-    let signal = []
-    for (let i = 1; i < st.length - 1; i++) {
-        if (st[i].Supertrend.Direction != st[i - 1].Supertrend.Direction) {
-            signal.push({
-                index: i,
-                st: st[i]
-            });
-        }
-    }
-    let result = []
-    data.map((item, index) => {
-        let _st = {
-            Direction: (st[index].Supertrend.Direction) ? 0 : 1,
-            Up: (st[index].Supertrend.Up) ? st[index].Supertrend.Up : 0,
-            Down: (st[index].Supertrend.Down) ? st[index].Supertrend.Down : 0,
-            ActiveTrend: (st[index].Supertrend.ActiveTrend) ? st[index].Supertrend.ActiveTrend : 0,
-        }
-        //lọc tín hiệu nhiễu
+//     let signal = []
+//     for (let i = 1; i < st.length - 1; i++) {
+//         if (st[i].Supertrend.Direction != st[i - 1].Supertrend.Direction) {
+//             signal.push({
+//                 index: i,
+//                 st: st[i]
+//             });
+//         }
+//     }
+//     let result = []
+//     data.map((item, index) => {
+//         let _st = {
+//             Direction: (st[index].Supertrend.Direction) ? 0 : 1,
+//             Up: (st[index].Supertrend.Up) ? st[index].Supertrend.Up : 0,
+//             Down: (st[index].Supertrend.Down) ? st[index].Supertrend.Down : 0,
+//             ActiveTrend: (st[index].Supertrend.ActiveTrend) ? st[index].Supertrend.ActiveTrend : 0,
+//         }
+//         //lọc tín hiệu nhiễu
 
-        let _signal = signal.find(i => i.index === index)
-        if (_signal) {
-            //kiểm tra ema hiện tại
-            let emaCurrent = ema10[index]
-            let spCurrent = _signal.st.Supertrend
-            let close = data[index].close
-            let high = data[index].high
-            let low = data[index].low
-            let barTime = moment(data[index].time).format('DD/MM HH:mm ')
-            let rawTime = data[index].time
-            let side = (_signal.st.Supertrend.Direction > 0) ? "LONG" : "SHORT"
+//         let _signal = signal.find(i => i.index === index)
+//         if (_signal) {
+//             //kiểm tra ema hiện tại
+//             let emaCurrent = ema10[index]
+//             let spCurrent = _signal.st.Supertrend
+//             let close = data[index].close
+//             let high = data[index].high
+//             let low = data[index].low
+//             let barTime = moment(data[index].time).format('DD/MM HH:mm ')
+//             let rawTime = data[index].time
+//             let side = (_signal.st.Supertrend.Direction > 0) ? "LONG" : "SHORT"
 
-            //check supertrend trước cùng trend thì bỏ qua
-            //lấy index trend hiện tại
-            let _indexCurrentSp = signal.findIndex(i => i.index === index)
-            let psarCurrent = __psar[index]
-            //nếu bắt đầu superTrend và __psar count cùng chiều 
-            let psarSide = (psarCurrent.trend > 0) ? "LONG" : "SHORT";
-            //check psar, nếu psar trong chu kì hiện tại hoặc trong 4 chu kì trước cùng chiều thì vào lệnh
-            if (side === "LONG" && close > emaCurrent && psarSide === "LONG" && psarCurrent.barCount < IndicatorConfig.signal.psarMaxCount) {
+//             //check supertrend trước cùng trend thì bỏ qua
+//             //lấy index trend hiện tại
+//             let _indexCurrentSp = signal.findIndex(i => i.index === index)
+//             let psarCurrent = __psar[index]
+//             //nếu bắt đầu superTrend và __psar count cùng chiều 
+//             let psarSide = (psarCurrent.trend > 0) ? "LONG" : "SHORT";
+//             //check psar, nếu psar trong chu kì hiện tại hoặc trong 4 chu kì trước cùng chiều thì vào lệnh
+//             if (side === "LONG" && close > emaCurrent && psarSide === "LONG" && psarCurrent.barCount < IndicatorConfig.signal.psarMaxCount) {
 
-                if (_indexCurrentSp != 0) {
-                    //lấy suppertrend trước
-                    let preSp = signal[_indexCurrentSp - 1]
-                    //lấy ra hướng
-                    let Dicrection = preSp.st.Supertrend.Direction;
-                    //kiểm tra với sp hiện tại,nếu giống thì bỏ qua hiện tại
-                    if (Dicrection === spCurrent.Dicrection) {
-                        _signal = 0
-                    } else {
+//                 if (_indexCurrentSp != 0) {
+//                     //lấy suppertrend trước
+//                     let preSp = signal[_indexCurrentSp - 1]
+//                     //lấy ra hướng
+//                     let Dicrection = preSp.st.Supertrend.Direction;
+//                     //kiểm tra với sp hiện tại,nếu giống thì bỏ qua hiện tại
+//                     if (Dicrection === spCurrent.Dicrection) {
+//                         _signal = 0
+//                     } else {
 
-                        _signal = _signal.st.Supertrend
-                        _signal.entryOrder = {
-                            name,
-                            side,
-                            entryPrice: formatPrice((high + low) / 2, name),//entryPrice = high+close /2
-                            tpPrice: getTP(side, (high + low) / 2, name),
-                            slPrice: formatPrice(spCurrent.ActiveTrend, name),
-                            barTime, rawTime
-                        }
+//                         _signal = _signal.st.Supertrend
+//                         _signal.entryOrder = {
+//                             name,
+//                             side,
+//                             entryPrice: formatPrice((high + low) / 2, name),//entryPrice = high+close /2
+//                             tpPrice: getTP(side, (high + low) / 2, name),
+//                             slPrice: formatPrice(spCurrent.ActiveTrend, name),
+//                             barTime, rawTime
+//                         }
 
-                    }
-                }
+//                     }
+//                 }
 
-            } else if (side === "SHORT" && close < emaCurrent && psarSide === "SHORT" && psarCurrent.barCount < IndicatorConfig.signal.psarMaxCount) {
-                if (_indexCurrentSp != 0) {
-                    //lấy suppertrend trước
-                    let preSp = signal[_indexCurrentSp - 1]
-                    //lấy ra hướng
-                    let Dicrection = preSp.st.Supertrend.Direction;
-                    //kiểm tra với sp hiện tại,nếu giống thì bỏ qua hiện tại
-                    if (Dicrection === spCurrent.Dicrection) {
-                        _signal = 0
-                    } else {
-                        _signal = _signal.st.Supertrend
-                        _signal.entryOrder = {
-                            name,
-                            side,
-                            entryPrice: (high + low) / 2,//entryPrice = high+close /2
-                            tpPrice: getTP(side, (high + low) / 2, name),
-                            slPrice: spCurrent.ActiveTrend,
-                            barTime, rawTime
-                        }
-                    }
-                }
-            } else {
-                _signal = 0
-            }
-        } else {
-            _signal = 0
-        }
-        result.push({ ...item, st: _st, ema10: ema10[index], ema50: ema50[index], signal: _signal, psar: __psar[index] })
-    })
-    //ghi lên db 
-    //Kiểm tra lastSignal
-    let currentSignal = result[result.length - 2].signal;
-    //*test
-    // currentSignal = result.filter(i => i.signal != 0)
-    // currentSignal = currentSignal[currentSignal.length - 1]
-    // currentSignal = currentSignal.signal
-    //end test
-    if (currentSignal != 0) {
-        let { name, side, entryPrice, tpPrice, slPrice, barTime } = currentSignal.entryOrder
-        let msg = `${barTime} ${side} ${name} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice} `
-        sendMessageToWS({
-            cataloge: 'bot',
-            type: 'alert',
-            msg
-        })
-        let uniqueName = `${name}_${timeframe}_${side}_${barTime}`
-        logMessage.set(uniqueName,
-            {
-                signal: currentSignal,
-                msg
-            })
-    }
-    let fileName = `future_${name}_${timeframe}.json`
-    fs.writeFile(fileName, JSON.stringify(result), function (err) {
-        if (err) {
-            return console.log(err);
-        }
-        console.log(`[${countMain}] [${count}]  ${new Date()} ${fileName} write  ${name}  complete `);
-        count++;
-    });
+//             } else if (side === "SHORT" && close < emaCurrent && psarSide === "SHORT" && psarCurrent.barCount < IndicatorConfig.signal.psarMaxCount) {
+//                 if (_indexCurrentSp != 0) {
+//                     //lấy suppertrend trước
+//                     let preSp = signal[_indexCurrentSp - 1]
+//                     //lấy ra hướng
+//                     let Dicrection = preSp.st.Supertrend.Direction;
+//                     //kiểm tra với sp hiện tại,nếu giống thì bỏ qua hiện tại
+//                     if (Dicrection === spCurrent.Dicrection) {
+//                         _signal = 0
+//                     } else {
+//                         _signal = _signal.st.Supertrend
+//                         _signal.entryOrder = {
+//                             name,
+//                             side,
+//                             entryPrice: (high + low) / 2,//entryPrice = high+close /2
+//                             tpPrice: getTP(side, (high + low) / 2, name),
+//                             slPrice: spCurrent.ActiveTrend,
+//                             barTime, rawTime
+//                         }
+//                     }
+//                 }
+//             } else {
+//                 _signal = 0
+//             }
+//         } else {
+//             _signal = 0
+//         }
+//         result.push({ ...item, st: _st, ema10: ema10[index], ema50: ema50[index], signal: _signal, psar: __psar[index] })
+//     })
+//     //ghi lên db 
+//     //Kiểm tra lastSignal
+//     let currentSignal = result[result.length - 2].signal;
+//     //*test
+//     // currentSignal = result.filter(i => i.signal != 0)
+//     // currentSignal = currentSignal[currentSignal.length - 1]
+//     // currentSignal = currentSignal.signal
+//     //end test
+//     if (currentSignal != 0) {
+//         let { name, side, entryPrice, tpPrice, slPrice, barTime } = currentSignal.entryOrder
+//         let msg = `${ barTime } ${ side } ${ name } Entry:${ entryPrice } TP:${ tpPrice } SL:${ slPrice } `
+//         sendMessageToWS({
+//             cataloge: 'bot',
+//             type: 'alert',
+//             msg
+//         })
+//         let uniqueName = `${ name }_${ timeframe }_${ side }_${ barTime } `
+//         logMessage.set(uniqueName,
+//             {
+//                 signal: currentSignal,
+//                 msg
+//             })
+//     }
+//     let fileName = `future_${ name }_${ timeframe }.json`
+//     fs.writeFile(fileName, JSON.stringify(result), function (err) {
+//         if (err) {
+//             return console.log(err);
+//         }
+//         console.log(`[${ countMain }][${ count }]  ${ new Date() } ${ fileName } write  ${ name } complete `);
+//         count++;
+//     });
 
-    //send to db
+//     //send to db
 
-}
+// }
 var alertList = []
 async function getIndicator(tick, name, timeframe) {
     return new Promise(async (resolve, reject) => {
@@ -526,8 +558,9 @@ async function getIndicator(tick, name, timeframe) {
             dataHighCloseLow.push([parseFloat(high), parseFloat(close), parseFloat(low)])
         })
         //* alert
+
+        mybot1(dataClose, dataFull, name, timeframe);
         //1. volume cao x2
-        let aa = mybot(dataFull, name, timeframe, dataSuperTrend)
 
         //sendMessageToWS(msg)
 
@@ -629,8 +662,8 @@ async function getFuturePrice(timeframe) {
             count = 1;
             let listAsset = rawFuturesExchangeInfo.symbols;
             let listSymbolNotIncluceBUSD = listAsset.filter(pair => {
-                return true;
-                //  return (!ListBANSymbol.includes(pair.symbol) && !(pair.symbol.includes("BUSD")) && !(pair.symbol.includes("_")))
+
+                return (!IndicatorConfig.ListBANSymbol.includes(pair.symbol) && !(pair.symbol.includes("BUSD")) && !(pair.symbol.includes("_")))
             })
             let listSupport = []
             listSymbolNotIncluceBUSD.map(item => {
@@ -657,8 +690,8 @@ async function getFuturePrice(timeframe) {
                     }
                 }
                 let TokenList = []
+                //_listPair = [{ symbol: 'ROSEUSDT' }]
                 listSymbolUse = _listPair
-                 //_listPair = [{ symbol: 'KLAYUSDT' }]
                 console.log('Begin fetch data. [' + _listPair.length + "]")
                 _listPair.forEach(i => {
                     TokenList.push(handleData(i.symbol, timeframe));
@@ -680,5 +713,5 @@ function main() {
 }
 main();
 app.listen(port, () => {
-    console.log(`Price app listening on port ${port}`)
+    console.log(`Price app listening on port ${port} `)
 })

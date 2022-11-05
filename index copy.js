@@ -1,13 +1,37 @@
 const express = require('express')
 const app = express()
 const port = 3000
+const moment = require('moment')
+const request = require('request')
 var wsClientList = [];
+var fs = require('fs')
 var compression = require('compression')
 const cors = require('cors')
 const enableWs = require('express-ws')
 var bodyParser = require('body-parser')
-
+var exchangeInfo = null;
+var logMessage = new Map()
+var count = 1;
+var listSymbolUse = []
+countMain = 1;
 enableWs(app)
+const WebSocket = require('ws');
+const wss = new WebSocket.Server({ port: 3030 });
+const clients = new Map();
+wss.on('connection', (ws) => {
+    console.log('client connect')
+    const id = uuidv4();
+    clients.set(ws, id);
+
+    ws.on("message", (messageAsString) => {
+        [...clients.keys()].forEach((client) => {
+            client.send('hello');
+        });
+    })
+    ws.on("close", () => {
+        clients.delete(ws);
+    });
+})
 app.use(compression())
 app.use(cors())
 app.use(bodyParser.urlencoded({ extended: false }))
@@ -15,25 +39,7 @@ app.use(bodyParser.json())
 app.ws('/ws', (ws, req) => {
     wsClientList.push(ws);
     ws.on('message', msg => {
-        oneInsert({
-            name: 'BTCUSDT',
-            timeframe: '15m',
-            type: 'SPOT',
-            time: (new Date).valueOf(),
-            priceList: JSON.stringify([1, 3, 3, 4, 5]),
-            indicatorList: JSON.stringify([
-                {
-                    name: 'supertrend',
-                    list: [3, 4, 5, 6]
-                },
-                {
-                    name: 'ema',
-                    list: [1, 2, 3, 4]
-                }
-            ])
-        }).then(data => {
-            ws.send('ok')
-        })
+        sendMessageToWS("hello")
     })
     ws.on('close', () => {
         wsClientList = wsClientList.filter(item => { item === ws })
@@ -43,8 +49,11 @@ app.ws('/ws', (ws, req) => {
 app.get('/', (req, res) => {
     res.send({ hello: "world" })
 })
-app.get('/b', (req, res) => {
+app.get('/plot', (req, res) => {
     res.sendFile(__dirname + '/plot.html');
+})
+app.get('/backtest', (req, res) => {
+    res.sendFile(__dirname + '/backtest.html');
 })
 app.get('/bb', (req, res) => {
 
@@ -54,16 +63,25 @@ app.get('/bb', (req, res) => {
         res.end(data);
     })
 })
+app.get('/backtest_getconfig', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.send(IndicatorConfig)
+})
 app.get('/getOne', (req, res) => {
     let { name, type, timeframe } = req.query
-    priceDB.find({ name, type, timeframe }).then(data => {
-        res.send(data)
+    let fileName = `${type}_${name}_${timeframe}.json`
+    fs.readFile(fileName, 'utf8', (err, data) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(data);
     })
 })
 app.get('/getAll', (req, res) => {
     priceDB.find({}).then(data => {
         res.send(data)
     })
+})
+app.get('/getLog', (req, res) => {
+    res.send(Object.fromEntries(logMessage))
 })
 app.get('/listSupport', (req, res) => {
     let { type } = req.query
@@ -72,7 +90,7 @@ app.get('/listSupport', (req, res) => {
     })
 })
 app.post('/configmybot', (req, res) => {
-    let { noti, emaPeriod, spPeriod, spMul, psarMaxCount, psarStep, psarMax, minVol } = req.body
+    let { noti, emaPeriod, spPeriod, spMul, psarMaxCount, psarStep, psarMax, minVol, levager, minROE } = req.body
     IndicatorConfig.noti = noti
     IndicatorConfig.minVolume = minVol
     IndicatorConfig.signal.emaPeriod = emaPeriod
@@ -81,9 +99,13 @@ app.post('/configmybot', (req, res) => {
     IndicatorConfig.signal.psarMax = psarMax
     IndicatorConfig.signal.psarMaxCount = psarMaxCount
     IndicatorConfig.signal.psarStep = psarStep
+    IndicatorConfig.levager = levager
+    IndicatorConfig.minROE = minROE
+})
+app.get('/listsymbolsupport', (req, res) => {
+    res.send(listSymbolUse)
 })
 function formatListSupportJSONResult(data) {
-
     let result = []
     data.map(item => {
         //check 
@@ -93,7 +115,6 @@ function formatListSupportJSONResult(data) {
             symbol: JSON.parse(symbol),
         })
     })
-
     return result;
 }
 
@@ -102,24 +123,23 @@ const mongoist = require('mongoist');
 const db = mongoist(url);
 const priceDB = db.price;
 db.on('connect', function () {
-    console.log('database connected')
+    //   console.log('database connected')
 })
-function sendToWs(mes) {
-    wss.clients.forEach(function each(client) {
-        client.send(msg);
-    });
-}
+
 function sendNotification(msg) {
     IndicatorConfig.noti.map(item => {
-        //send msg to item
+        let url = `https://pushnotify.co.uk/send/?userid=${item.userid}&code=${item.code}&txt=${msg}`
+        request(url, (error, response, body) => {
+            console.log('send msg to ' + item.userid + ' done!!1')
+        })
     })
 }
 async function oneInsert(data) {
     return new Promise((resolve, reject) => {
-        let { name, timeframe, time, type, indicatorList } = data;
+        let { name, timeframe, time, type, priceList } = data;
         priceDB.findAndModify({
             query: { name, timeframe, type },
-            update: { $set: { name, time, type, indicatorList } },
+            update: { $set: { name, time, type, priceList } },
             upsert: true,
         }).then(data => {
             resolve(data)
@@ -128,136 +148,34 @@ async function oneInsert(data) {
         });
     })
 }
-
+function uuidv4() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 //*binance
-var volumeSensor = 2
-const delay = require('delay')
 const Binance = require('node-binance-api');
-const ta = require('ta.js');
-const moment = require('moment')
 const binance = new Binance({
     recvWindow: 60000, // Set a higher recvWindow to increase response timeout
 })
 var IndicatorConfig = {
-    noti: [123, 123],
+    ListBANSymbol: ['1000', '_', 'LUNA2', 'FOOT'],
+    noti: [{ userid: 'baotm', code: 726624 }],
     signal: {
-        emaPeriod: 30,
+        emaPeriod: 20,
         spPeriod: 13,
-        spMul: 2.5,
-        psarMaxCount: 2,
+        spMul: 3,
+        psarMaxCount: 4,
         psarStep: 0.02,
         psarMax: 0.02
     },
     minVolume: 2,
-    sma: {
-        period: 14
-    },
-    smma: {
-        period: 14
-    },
-    wma: {
-        period: 14
-    },
-    ema: {
-        period: 14
-    },
-    vwma: {
-        period: 20
-    },
-    kama: {
-        period1: 10,
-        period2: 2,
-        period3: 30
-    },
-    macd: {
-        period1: 12,
-        period2: 26
-    },
-    rsi: {
-        period: 14
-    },
-    tsi: {
-        long: 3,
-        short: 2,
-        signal: 2
-    },
-    bop: {
-        period: 13
-    },
-    fi: {
-        period: 13
-    },
-    alligator: {
-        jaw: 13,
-        teeth: 8,
-        lip: 5,
-        shiftjaw: 8,
-        teethshift: 5,
-        lipshift: 3
-    },
-    willpercentr: {
-        period: 14
-    },
-    stochastics: {
-        length: 2,
-        smoothd: 1,
-        smoothk: 1
-    },
-    ichimoku: {
-        length1: 9,
-        length2: 26,
-        length3: 52,
-        displacement: 26
-    },
-    atr: {
-        period: 3
-    },
-    aroon: {
-        up: 10,
-        down: 10
-    },
-    roc: {
-        length: 14
-    },
-    kst: {
-        r1: 10,
-        s1: 10,
-        r2: 15,
-        s2: 10,
-        r3: 20,
-        s3: 10,
-        r4: 30,
-        s4: 15,
-        signal: 9
-    },
-    mom: {
-        length: 10,
-        percent: false
-    },
-    hafltrend: {
-        atrlend: 6,
-        amplitude: 3,
-        deviation: 2
-    },
-    superTrend: {
-        length: 8,
-        multi: 3
-
-    },
-    supportLine: {
-
-    },
-    resistantLine: {
-
-    },
-    ao: {
-        short: 5,
-        long: 35,
-    },
-    chaikin_osc: {
-        length1: 3,
-        length2: 10
-    }
+    levager: 25,
+    minROE: 30,
+    volumeSensor: 3,
+    timeOut: 25,
+    timeframe: '15m'
 
 }
 var ListBANSymbol = ['LUNA', '1000']
@@ -288,7 +206,6 @@ function getListBinanceSupport() {
     binance.exchangeInfo().then(rawFuturesExchangeInfo => {
         if (rawFuturesExchangeInfo) {
             let listAsset = rawFuturesExchangeInfo.symbols;
-
             let listSupport = []
             listAsset.map(item => {
                 listSupport.push({ symbol: item.symbol, exchangeInfo: item })
@@ -306,17 +223,39 @@ function getListBinanceSupport() {
             });
             setTimeout(() => {
                 getListBinanceSupport();
-            }, 1000 * 60 * 60 * 2)
+            }, 1000 * IndicatorConfig.timeOut * 50)
 
         }
     })
 
 }
+function getTP(side, entryPrice, name) {
+    //Takeprofit = 30% ROE x25
+    let levager = IndicatorConfig.levager
+    let minROE = IndicatorConfig.minROE
+    //calc minROE
+    /*
+    Giá mục tiêu Long = giá vào lệnh * (ROE%/đòn bẩy + 1)
+    Giá mục tiêu Short = giá vào lệnh * (1 - ROE%/đòn bẩy)
+    */
+    let tpPrice = 0;
+    if (side === "LONG") {
+        tpPrice = entryPrice * ((minROE / 100) / levager + 1)
+    } else {
+        tpPrice = entryPrice * (1 - (minROE / 100) / levager)
+    }
+    return formatPrice(tpPrice, name);
 
+}
 function sendMessageToWS(msg) {
+    //
+    [...clients.keys()].forEach((client) => {
+        client.send(JSON.stringify(msg));
+    });
     wsClientList.forEach((ws) => {
-        ws.send(msg)
+        ws.send(JSON.stringify(msg))
     })
+    sendNotification(msg.msg)
 }
 
 function superTrend(data, period, multiplier, name, timeframe) {
@@ -327,6 +266,25 @@ function superTrend(data, period, multiplier, name, timeframe) {
     let a = (newStudyATR.calculate(data, { period, multiplier }))
     //
     return a;
+}
+
+function formatPrice(price, name) {
+    let symbolInfo = exchangeInfo.find(i => i.symbol === name)
+
+    if (symbolInfo) {
+        let pricePrecision = symbolInfo.pricePrecision
+        return parseFloat(String(price.toFixed(pricePrecision)))
+    } else {
+        console.log('write fail at ' + name)
+        return price;
+    }
+}
+function mybot1(){
+    // iff_1 = Trail1 > nz(Trail2[1], 0) ? Trail1 - SL2 : Trail1 + SL2
+// iff_2 = Trail1 < nz(Trail2[1], 0) and Trail1[1] < nz(Trail2[1], 0) ?  Trail1 + SL2 : iff_1
+// Trail2 := Trail1 > nz(Trail2[1], 0) and Trail1[1] > nz(Trail2[1], 0) ? Trail1 - SL2 : iff_2
+
+    let ema1
 }
 function mybot(data, name, timeframe, dataSuperTrend) {
     //* tính psar
@@ -421,6 +379,10 @@ function mybot(data, name, timeframe, dataSuperTrend) {
             let emaCurrent = ema10[index]
             let spCurrent = _signal.st.Supertrend
             let close = data[index].close
+            let high = data[index].high
+            let low = data[index].low
+            let barTime = moment(data[index].time).format('DD/MM HH:mm ')
+            let rawTime = data[index].time
             let side = (_signal.st.Supertrend.Direction > 0) ? "LONG" : "SHORT"
 
             //check supertrend trước cùng trend thì bỏ qua
@@ -441,7 +403,17 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                     if (Dicrection === spCurrent.Dicrection) {
                         _signal = 0
                     } else {
+
                         _signal = _signal.st.Supertrend
+                        _signal.entryOrder = {
+                            name,
+                            side,
+                            entryPrice: formatPrice((high + low) / 2, name),//entryPrice = high+close /2
+                            tpPrice: getTP(side, (high + low) / 2, name),
+                            slPrice: formatPrice(spCurrent.ActiveTrend, name),
+                            barTime, rawTime
+                        }
+
                     }
                 }
 
@@ -456,6 +428,14 @@ function mybot(data, name, timeframe, dataSuperTrend) {
                         _signal = 0
                     } else {
                         _signal = _signal.st.Supertrend
+                        _signal.entryOrder = {
+                            name,
+                            side,
+                            entryPrice: (high + low) / 2,//entryPrice = high+close /2
+                            tpPrice: getTP(side, (high + low) / 2, name),
+                            slPrice: spCurrent.ActiveTrend,
+                            barTime, rawTime
+                        }
                     }
                 }
             } else {
@@ -467,14 +447,38 @@ function mybot(data, name, timeframe, dataSuperTrend) {
         result.push({ ...item, st: _st, ema10: ema10[index], ema50: ema50[index], signal: _signal, psar: __psar[index] })
     })
     //ghi lên db 
-    const fs = require('fs');
-    fs.writeFile("abc.csv", JSON.stringify(result), function (err) {
+    //Kiểm tra lastSignal
+    let currentSignal = result[result.length - 2].signal;
+    //*test
+    // currentSignal = result.filter(i => i.signal != 0)
+    // currentSignal = currentSignal[currentSignal.length - 1]
+    // currentSignal = currentSignal.signal
+    //end test
+    if (currentSignal != 0) {
+        let { name, side, entryPrice, tpPrice, slPrice, barTime } = currentSignal.entryOrder
+        let msg = `${barTime} ${side} ${name} Entry:${entryPrice} TP:${tpPrice} SL:${slPrice} `
+        sendMessageToWS({
+            cataloge: 'bot',
+            type: 'alert',
+            msg
+        })
+        let uniqueName = `${name}_${timeframe}_${side}_${barTime}`
+        logMessage.set(uniqueName,
+            {
+                signal: currentSignal,
+                msg
+            })
+    }
+    let fileName = `future_${name}_${timeframe}.json`
+    fs.writeFile(fileName, JSON.stringify(result), function (err) {
         if (err) {
             return console.log(err);
         }
-        console.log("The file was saved!");
+        console.log(`[${countMain}] [${count}]  ${new Date()} ${fileName} write  ${name}  complete `);
+        count++;
     });
 
+    //send to db
 
 }
 var alertList = []
@@ -493,12 +497,10 @@ async function getIndicator(tick, name, timeframe) {
         let dataCloseTime = []
         let dataCloseVolumeTime = []
         tick.map(i => {
-
             let [time, open, high, low, close, volume, closeTime, assetVolume, trades, buyBaseVolume, buyAssetVolume, ignored] = i;
             dataTime.push({
                 time, close
             })
-
             dataSuperTrend.push([
                 new Date(time),
                 parseFloat(open),
@@ -539,7 +541,7 @@ async function getIndicator(tick, name, timeframe) {
 
         let volumeLast = dataCloseVolume[dataCloseVolume.length - 2][1];
         let volumeCurrent = dataCloseVolume[dataCloseVolume.length - 1][1];
-        if (volumeCurrent >= volumeLast * volumeSensor) {
+        if (volumeCurrent >= volumeLast * IndicatorConfig.volumeSensor) {
             //có sự bơm
             //kiểm tra trong alertList có symbol chưa
             let sym = alertList.findIndex(i => { i.name === name && i.timeframe === timeframe })
@@ -567,211 +569,11 @@ async function getIndicator(tick, name, timeframe) {
             //reset count
             alertList = alertList.filter(i => { i.name !== name && i.timeframe !== timeframe })
         }
-
-        // let mybotsignal = await myBot(dataClose, 14, 0.02, name, timeframe)
-        //  console.log(mybotsignal)
-        //*
-        //2. ema giao cắt
-        // let _emaCross1 = await ta.ema(dataCloseTime, 9)
-        // let _emaCross2 = await ta.ema(dataCloseTime, 10)
-        // let _cross = await check_cross(_emaCross1, _emaCross2)
-        //myBot(dataClose, 14, 0.02);dxvzc
-
-        // let sma = await ta.sma(dataClose, IndicatorConfig.sma.period);//close
-        // let smma = await ta.smma(dataClose, IndicatorConfig.smma.period);//close
-        // let wma = await ta.wma(dataClose, IndicatorConfig.wma.period);//close
-        // let ema = await ta.ema(dataClose, IndicatorConfig.ema.period);//close
-        // let vwma = await ta.vwma(dataCloseVolume, IndicatorConfig.vwma.period);
-        // let kama = await ta.kama(dataClose, IndicatorConfig.kama.period1, IndicatorConfig.kama.period2, IndicatorConfig.kama.period3);
-        // let macd = await ta.macd(dataClose, IndicatorConfig.macd.period1, IndicatorConfig.macd.period2);//close
-        // let rsi = await ta.rsi(dataClose, IndicatorConfig.rsi.period);//close
-        // //True Strength Index (TSI)
-        // let tsi = await ta.tsi(dataClose, IndicatorConfig.tsi.long, IndicatorConfig.tsi.short, IndicatorConfig.tsi.signal);
-        // //Balance Of Power [open, high, low, close]
-        // let bop = await ta.bop(dataOpenHighLowClose, IndicatorConfig.bop.period)
-        // //Force Index [close, volume]
-        // let fi = await ta.fi(dataCloseVolume, IndicatorConfig.fi.period)
-        // //Accumulative Swing Index [high,close,low]
-        // let asi = await ta.asi(dataHighCloseLow);
-        // //Alligator Indicator
-        // let alligator = await ta.alligator(dataClose, IndicatorConfig.alligator.jaw, IndicatorConfig.alligator.teeth, IndicatorConfig.alligator.lip, IndicatorConfig.alligator.jawshift, IndicatorConfig.alligator.teethshift, IndicatorConfig.alligator.lipshift)
-        // //Williams %R
-        // let wp = await ta.pr(dataClose, IndicatorConfig.willpercentr.period)
-        // //Stochastics [high, close, low]
-        // let stochastics = await ta.stoch(dataHighCloseLow, IndicatorConfig.stochastics.length, IndicatorConfig.stochastics.smoothd, IndicatorConfig.stochastics.smoothk)
-        // //Ichimoku Cloud [high, close, low]
-        // let ichimoku = await ta.ichimoku(dataHighCloseLow, IndicatorConfig.ichimoku.length1, IndicatorConfig.ichimoku.length2, IndicatorConfig.ichimoku.length3, IndicatorConfig.ichimoku.displacement)
-        // //Average True Range (ATR) [high, close, low]
-        // let atr = await ta.atr(dataHighCloseLow, IndicatorConfig.atr.period)
-        // //Aroon Up 
-        // let aroonUp = await ta.aroon.up(dataClose, IndicatorConfig.aroon.up)
-        // let aroonDown = await ta.aroon.down(dataClose, IndicatorConfig.aroon.down);
-        // let aroon = {
-        //     up: aroonUp[aroonUp.length - 1],
-        //     down: aroonDown[aroonDown.length - 1]
-        // }
-        // let roc = await ta.roc(dataClose, IndicatorConfig.roc.length)
-        // //Know Sure Thing
-        // let kst = await ta.kst(dataClose, IndicatorConfig.kst.r1, IndicatorConfig.kst.r2, IndicatorConfig.kst.r3, IndicatorConfig.kst.r4, IndicatorConfig.kst.s1, IndicatorConfig.kst.s2, IndicatorConfig.kst.s3, IndicatorConfig.kst.s4, IndicatorConfig.kst.signal);
-        // //On-Balance Volume[asset volume, close price]
-        // let obv = await ta.obv(dataAssetVolumeClose)
-        // //Momentum
-        // let mom = await ta.mom(dataClose, IndicatorConfig.mom.length, IndicatorConfig.mom.percent);
-        // //HalfTrend data = [high, close, low]
-        // let halfTrend = await ta.halftrend(dataHighCloseLow, IndicatorConfig.hafltrend.atrlend, IndicatorConfig.hafltrend.amplitude, IndicatorConfig.hafltrend.deviation);
-        // //SuperTrend= [high, close, low]
-        // let superTrend = await ta.supertrend(dataHighCloseLow, IndicatorConfig.superTrend.length, IndicatorConfig.superTrend.multi);
-        // let _superTrend = []
-        // // let sp = await getSupertrend(dataHighCloseLow, 8, 3);
-        // // for (let i = 0; i < superTrend.length; i) {
-        // //     let priceIndex = (IndicatorConfig.superTrend.length - 1) + i
-        // //     let timeAt = dataTime[priceIndex].time;
-        // //     let closeAt = parseFloat(dataTime[priceIndex].close);
-        // //     let up = superTrend[i][0]
-        // //     let down = superTrend[i][1]
-        // //     let direction = (closeAt > up) ? "LONG" : "SHORT"
-        // //     _superTrend.push({
-        // //         up, down, direction, timeAt, closeAt
-        // //     })
-        // //     i++;
-        // // }
-        // //Awesome Oscillator [high, low]
-
-
-
-        // let ao = await ta.ao(dataHighLow, IndicatorConfig.ao.short, IndicatorConfig.ao.long);
-        // //Chaikin Oscillator [high, close, low, volume]
-        // let chainking = await ta.chaikin_osc(dataHighCloseLowVolume, IndicatorConfig.chaikin_osc.length1, IndicatorConfig.chaikin_osc.length2);
-        // //TechnicalIndicators.js
-
-
-        // //Support Line
-
-        // //Resistance Line
-
-        // // // CandleStick Pattern
-        // // let dataTwo = {}
-        // // let dataThree = {}
-        // // let dataOne = {}
-        // // let a_open = []
-        // // let a_high = []
-        // // let a_close = []
-        // // let a_low = []
-
-        // // //1 nến
-        // // for (let i = tick.length - 2; i < tick.length - 1; i++) {
-        // //     let [time, open, high, low, close, volume, closeTime, assetVolume, trades, buyBaseVolume, buyAssetVolume, ignored] = tick[i];
-        // //     a_open.push(parseFloat(open))
-        // //     a_high.push(parseFloat(high))
-        // //     a_close.push(parseFloat(close))
-        // //     a_low.push(parseFloat(low))
-        // // }
-        // // dataOne.open = a_close
-        // // dataOne.high = a_high
-        // // dataOne.close = a_close
-        // // dataOne.low = a_low
-
-        // // a_close = []
-        // // a_open = []
-        // // a_low = []
-        // // a_high = []
-        // // //2 nến
-        // // for (let i = tick.length - 3; i < tick.length - 1; i++) {
-        // //     let [time, open, high, low, close, volume, closeTime, assetVolume, trades, buyBaseVolume, buyAssetVolume, ignored] = tick[i];
-        // //     a_open.push(parseFloat(open))
-        // //     a_high.push(parseFloat(high))
-        // //     a_close.push(parseFloat(close))
-        // //     a_low.push(parseFloat(low))
-        // // }
-        // // dataTwo.open = a_close
-        // // dataTwo.high = a_high
-        // // dataTwo.close = a_close
-        // // dataTwo.low = a_low
-
-        // // a_close = []
-        // // a_open = []
-        // // a_low = []
-        // // a_high = []
-        // // // 3 cây
-        // // for (let i = tick.length - 4; i < tick.length - 1; i++) {
-        // //     let [time, open, high, low, close, volume, closeTime, assetVolume, trades, buyBaseVolume, buyAssetVolume, ignored] = tick[i];
-        // //     a_open.push(parseFloat(open))
-        // //     a_high.push(parseFloat(high))
-        // //     a_close.push(parseFloat(close))
-        // //     a_low.push(parseFloat(low))
-        // // }
-        // // dataThree.open = a_close
-        // // dataThree.high = a_high
-        // // dataThree.close = a_close
-        // // dataThree.low = a_low
-
-
-        // // let patternCheck = {
-        // //     abandonedbaby: abandonedbaby(dataThree),
-        // //     bearishengulfingpattern: bearishengulfingpattern(dataTwo),
-        // //     bullishengulfingpattern: bullishengulfingpattern(dataTwo),
-        // //     darkcloudcover: darkcloudcover(dataTwo),
-        // //     downsidetasukigap: downsidetasukigap(dataThree),
-        // //     doji: doji(dataOne),
-        // //     dragonflydoji: dragonflydoji(dataOne),
-        // //     gravestonedoji: gravestonedoji(dataOne),
-        // //     bullishharami: bullishharami(dataTwo),
-        // //     bearishharami: bearishharami(dataTwo),
-        // //     bullishharamicross: bullishharamicross(dataTwo),
-        // //     bearishharamicross: bearishharamicross(dataTwo),
-        // //     bullishmarubozu: bullishmarubozu(dataOne),
-        // //     bearishmarubozu: bearishmarubozu(dataOne),
-        // //     eveningdojistar: eveningdojistar(dataThree),
-        // //     eveningstar: eveningstar(dataThree),
-        // //     bullishspinningtop: bullishspinningtop(dataOne),
-        // //     bearishspinningtop: bearishspinningtop(dataOne),
-        // //     morningstar: morningstar(dataThree),
-        // //     morningdojistar: morningdojistar(dataThree),
-        // //     threeblackcrows: threeblackcrows(dataThree),
-        // //     threewhitesoldiers: threewhitesoldiers(dataThree),
-        // //     bullishhammerstick: bullishhammerstick(dataOne),
-        // //     bearishhammerstick: bearishhammerstick(dataOne),
-        // //     bullishinvertedhammerstick: bullishinvertedhammerstick(dataOne),
-        // //     //    tweezerbottom: tweezerbottom(dataThree),
-        // //     //  tweezertop: tweezertop(dataThree)
-        // // }
-        // // let patternDetect = []
-        // // Object.keys(patternCheck).forEach(key => {
-        // //     if (patternCheck[key]) {
-        // //         patternDetect.push({
-        // //             pattern: key
-        // //         })
-        // //     }
-        // //     // key , value
-        // // })
-
-
-        // // cẩn 1 cây cuối doji,dragonflydoji,Bullish Marubozu,bearishmarubozu,Bullish Hammer
-
-        // // cần 2 cây cuối  bearishengulfingpattern,darkcloudcover,Bullish Harami,Bearish Harami Cross,Bearish Harami,
-        // //Morning Doji Star,
-
-        // // cần 3 cây cuối abandoned-baby,downsidetasukigap,Evening Doji Star,Three Black Crows
-        // //let {name, timeframe, time, type, priceList, indicatorList} = data;
         let time = (new Date()).valueOf();
         resolve({
             name, timeframe, time, type: 'future',
-            // priceList: JSON.stringify(dataFull),
-            // indicatorList: JSON.stringify({
-            //     _superTrend,
-            //     rsi: rsi[rsi.length - 1]
-            // })
         })
-        // resolve({
-        //     dataFull, superTrendFull: superTrend,
-        //     name, timeframe,
-        //     sma: sma[sma.length - 1], smma: smma[[smma.length - 1]], wma: [wma.length - 1], ema: ema[ema.length - 1],
-        //     vwma: vwma[vwma.length - 1], kama: kama[kama.length - 1], macd: [macd.length - 1], rsi: rsi[rsi.length - 1],
-        //     tsi: tsi[tsi.length - 1], bop: bop[bop.length - 1], fi: fi[fi.length - 1], asi: asi[asi.length - 1], alligator: alligator[alligator.length - 1],
-        //     wp: wp[wp.length - 1], stoch: stochastics[stochastics.length - 1], ichimoku: ichimoku[ichimoku.length - 1],
-        //     atr: atr[atr.length - 1], aroon: aroon, roc: roc[roc.length - 1], kst: kst[kst.length - 1], obv: obv[obv.length - 1],
-        //     mom: mom[mom.length - 1], hafltrend: halfTrend[halfTrend.length - 1], ao: ao[ao.length - 1], chainking: chainking[chainking.length - 1]
-        // })
+
     })
 }
 async function getData(symbol, time) {
@@ -801,7 +603,7 @@ async function getData(symbol, time) {
                     }
 
                 }
-            }, { limit: 1000 })
+            })
         }
         catch (err) {
             console.log('**** fetch error - limit IP')
@@ -818,8 +620,8 @@ async function handleData(symbol, time) {
         let data = await getData(symbol, time);
         if (data) {
             let dataIndicator = await getIndicator(data.ticks, symbol, time);
-            let insertData = await oneInsert(dataIndicator)
-            resolve(insertData)
+            //   let insertData = await oneInsert(dataIndicator)
+            resolve('ok')
         } else {
             resolve(null)
         }
@@ -829,44 +631,60 @@ async function handleData(symbol, time) {
 }
 
 async function getFuturePrice(timeframe) {
-    let listSupportFromDB = formatListSupportJSONResult(await db.symbolSupport.find({ type: 'future' }))
-    let listPair = listSupportFromDB[0].symbol
+    countMain++;
+    binance.futuresExchangeInfo().then(rawFuturesExchangeInfo => {
+        if (rawFuturesExchangeInfo) {
+            count = 1;
+            let listAsset = rawFuturesExchangeInfo.symbols;
+            let listSymbolNotIncluceBUSD = listAsset.filter(pair => {
+                return true;
+                //  return (!ListBANSymbol.includes(pair.symbol) && !(pair.symbol.includes("BUSD")) && !(pair.symbol.includes("_")))
+            })
+            let listSupport = []
+            listSymbolNotIncluceBUSD.map(item => {
+                listSupport.push({ symbol: item.symbol, exchangeInfo: item })
+            })
+            exchangeInfo = listSymbolNotIncluceBUSD
+            binance.futuresDaily().then(data => {
+                let _listPair = []
+                data = Object.entries(data);
+                let volumeMin = 10000000 * IndicatorConfig.minVolume;//min volume
 
-    let listSymbolVol = [];
-    //check
-    binance.futuresDaily().then(data => {
-        let _listPair = []
-        data = Object.entries(data);
-        let volumeMin = 10000000 * 3;//min volume
-        for (let i = 0; i < data.length; i++) {
-            for (let j = 0; j < listPair.length; j++) {
-                if (data[i][1].symbol === listPair[j].symbol) {
+                for (let i = 0; i < data.length; i++) {
                     let vol = parseFloat(data[i][1].quoteVolume)
-                    if (vol >= volumeMin) {
+                    //bỏ 1 số con trong list ban
+                    let symbol = data[i][1].symbol
+                    let isBan = false
+                    IndicatorConfig.ListBANSymbol.map(i => {
+                        if (symbol.includes(i)) {
+                            isBan = true;
+                        }
+                    })
+                    if (vol > volumeMin && !isBan) {
                         _listPair.push({ symbol: data[i][1].symbol })
                     }
                 }
-            }
+                let TokenList = []
+                listSymbolUse = _listPair
+                 //_listPair = [{ symbol: 'KLAYUSDT' }]
+                console.log('Begin fetch data. [' + _listPair.length + "]")
+                _listPair.forEach(i => {
+                    TokenList.push(handleData(i.symbol, timeframe));
+                })
+                Promise.all(TokenList).then(data => {
+                    console.log('===========================')
+                    setTimeout(() => {
+                        getFuturePrice(IndicatorConfig.timeframe)
+                    }, 1000 * IndicatorConfig.timeOut)
+                })
+            })
         }
-        _listPair = [{ symbol: 'CHZUSDT' }]
-        console.log(_listPair.length)
-        let TokenList = []
-        console.log('===========================')
-        _listPair.forEach(i => {
-            TokenList.push(handleData(i.symbol, timeframe));
-        })
-        Promise.all(TokenList).then(data => {
-            console.log('done')
-            setTimeout(() => {
-                getFuturePrice('15m')
-            }, 1000 * 30)
-        })
     })
+
 
 }
 function main() {
-    getListBinanceSupport();
-    getFuturePrice('15m')
+    getFuturePrice(IndicatorConfig.timeframe)
 }
 main();
 app.listen(port, () => {

@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <style>
+        #tvchart {
+            position: absolute;
+            width: 98vw;
+            height: 90vh;
+        }
+    </style>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TV Indicators</title>
+</head>
+
+<body>
+
+    <select onChange="changeSymbol(this.options[this.selectedIndex].value)" id="ListSupport">
+
+    </select>
+    <div id="tvchart"></div>
+
+</body>
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<script>
+    var chart;
+    var exchangeInfo;
+    const { log, error } = console;
+    var timeframe;
+    var name;
+    var type;
+    function getListSupport() {
+
+    }
+    function geneOption(data_list) {
+        let str = ''
+        data_list.map(i => {
+            str += `
+  <option value="${i.symbol}">${i.symbol}</option>
+`
+        })
+        document.getElementById("ListSupport").innerHTML = str
+    }
+    function changeSymbol(symbol) {
+        console.log(symbol)
+        document.getElementById("tvchart").innerHTML = "";
+        renderChart(symbol)
+    }
+    function formatPrice(price, name1) {
+        let _name = name1 || name
+        let symbol = exchangeInfo.symbols.find(i => i.symbol === _name)
+
+        let pricePrecision = symbol.pricePrecision
+        return parseFloat(String(price.toFixed(pricePrecision)))
+    }
+    getParameters();
+    function getParameters() {
+        const params = new URLSearchParams(window.location.search);
+        timeframe = params.get('timeframe')
+        name = params.get('name')
+        type = params.get('type')
+    }
+    const getData = async (symbol) => {
+        var rep_exchangeInfo = await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo')
+        exchangeInfo = await rep_exchangeInfo.json()
+
+        let urlList = `/listsymbolsupport`
+        const resp_list = await fetch(urlList);
+        const data_list = await resp_list.json();
+        geneOption(data_list)
+        let url = `/getOne?name=ROSEUSDT&type=future&timeframe=15m`
+        const resp = await fetch(url);
+        const data = await resp.json();
+        let _data = []
+        data.map(i => {
+            i.time = i.time / 1000
+            _data.push({ ...i })
+        })
+        return _data;
+    };
+
+    const renderChart = async (symbol) => {
+        const chartProperties = {
+            timeScale: {
+                borderColor: "rgb(225, 226, 227)",
+                timeVisible: true,
+                barSpacing: 10,
+            },
+            priceScale: {
+
+                autoScale: true
+            },
+            watermark: {
+                visible: true,
+                fontSize: 50,
+                horzAlign: 'center',
+                vertAlign: 'center',
+                color: 'rgba(171, 71, 188, 0.5)',
+                text: `${symbol}`,
+            },
+        };
+        const domElement = document.getElementById('tvchart');
+        const chart = LightweightCharts.createChart(domElement, chartProperties);
+        window.addEventListener('resize', () => {
+            chart.resize(window.innerWidth, window.innerHeight);
+        });
+        const candleseries = chart.addCandlestickSeries();
+        const klinedata = await getData(symbol);
+        candleseries.setData(klinedata);
+        const t1 = chart.addLineSeries({ color: 'blue', lineWidth: 2 });
+        const t2 = chart.addLineSeries({ color: 'red', lineWidth: 2 });
+
+        candleseries.setMarkers(
+            klinedata
+                .filter((d) => d.signal)
+                .map((d) => {
+                    let signal = d.signal;
+                    if (signal != 0) {
+                        let signal = d.signal;
+                        let time = d.time;
+                        let position = (signal.signal === "LONG") ? "belowBar" : "aboveBar"
+                        let color = (signal.signal === "LONG") ? "green" : "red"
+                        let shape = (signal.signal === "LONG") ? "arrowUp" : "arrowDown"
+                        let text = (signal.signal === "LONG") ? `LONG@E:${formatPrice(signal.entry, symbol)} SL:${formatPrice(signal.sl, symbol)}` : `SHORT@E:${formatPrice(signal.entry, symbol)} SL:${formatPrice(signal.sl, symbol)} `
+                        return {
+                            time,
+                            position,
+                            color,
+                            shape,
+                            text
+                        }
+                    }
+                })
+        )
+        const ema10 = klinedata
+            .filter((d) => d)
+            .map((d) => ({ time: d.time, value: d.t1 }));
+        const ema50 = klinedata
+            .filter((d) => d)
+            .map((d) => ({ time: d.time, value: d.t2 }));
+        t1.setData(ema10);
+        t2.setData(ema50);
+
+    }
+    renderChart("BTCUSDT");
+</script>
+
+</html>
